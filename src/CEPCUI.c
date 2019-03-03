@@ -27,12 +27,15 @@
  * POSSIBILITY OF SUCH DAMAGE.
  ******************************************************************************/
 
-#include "m2m/lang/M2MString.h"
 #include "m2m/cep/M2MCEP.h"
 #include "m2m/db/M2MColumnList.h"
+#include "m2m/db/M2MSQLiteDataType.h"
 #include "m2m/db/M2MTableManager.h"
 #include "m2m/io/M2MHeap.h"
-#include "m2m/util/logging/M2MLogger.h"
+#include "m2m/lang/M2MString.h"
+#include "m2m/log/M2MFileAppender.h"
+#include <stdbool.h>
+#include <stdint.h>
 
 
 /*******************************************************************************
@@ -48,7 +51,7 @@
  * @param[out] csv	CSV形式の入力データをコピーするためのポインタ(関数内部でヒープメモリを獲得する)
  * @return			コピーした入力データのポインタ or NULL(エラーの場合)
  */
-static M2MString *this_getCSV (M2MString **csv);
+static M2MString *this_getCSV (const M2MCEP *cep, M2MString **csv);
 
 
 /**
@@ -78,7 +81,7 @@ static unsigned char *this_getOutputFilePath (M2MString filePath[], const size_t
  * @param[in] resultLength	CSV形式のCEP処理結果データを示す文字列サイズ[Byte]
  * @return					true : ファイル出力に成功、false : ファイル出力に失敗
  */
-static bool this_setResult (const M2MString *result, const size_t resultLength);
+static bool this_setResult (const M2MCEP *cep, const M2MString *result, const size_t resultLength);
 
 
 /**
@@ -86,7 +89,7 @@ static bool this_setResult (const M2MString *result, const size_t resultLength);
  *
  * @param[in] time	スリープ時間[usec]
  */
-static void this_sleep (unsigned long time);
+static void this_sleep (const M2MCEP *cep, unsigned long time);
 
 
 /**
@@ -117,55 +120,45 @@ static void this_execute (M2MCEP *cep, const M2MString *tableName, const M2MStri
 	M2MString *csv = NULL;
 	M2MString *result = NULL;
 	M2MString FILE_PATH[PATH_MAX];
+	M2MFile *outputFile = NULL;
 	const M2MString *OUTPUT_FILE_PATH = this_getOutputFilePath(FILE_PATH, sizeof(FILE_PATH));
 	const M2MString *METHOD_NAME = (M2MString *)"CEPCUI.this_execute()";
 
 	//===== Check argument =====
 	if (cep!=NULL
 			&& tableName!=NULL && M2MString_length(tableName)>0
-			&& sql!=NULL && M2MString_length(sql)>0)
+			&& sql!=NULL && M2MString_length(sql)>0
+			&& (outputFile=M2MFile_new(OUTPUT_FILE_PATH))!=NULL)
 		{
-#ifdef DEBUG
-		M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, (M2MString *)"一定間隔でCEPを繰り返すループ処理を開始します");
-#endif // DEBUG
+		M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"一定間隔でCEPを繰り返すループ処理を開始します");
 		//===== 無限ループ =====
-		while (this_stop()==false)
+		while (this_stop(cep)==false)
 			{
 			//===== 出力ファイルが規程ディレクトリ内に存在しなかった場合 =====
-			if (M2MFile_exists(OUTPUT_FILE_PATH)==false)
+			if (M2MFile_exists(outputFile)==false)
 				{
-#ifdef DEBUG
-				M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, (M2MString *)"規程のディレクトリに設置された出力ファイルが存在しない事を確認しました．．．CEPを実行します");
-#endif // DEBUG
+				M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"規程のディレクトリに設置された出力ファイルが存在しない事を確認しました．．．CEPを実行します");
 				//===== CSV形式のレコードを取得した場合 =====
-				if (this_getCSV(&csv)!=NULL)
+				if (this_getCSV(cep, &csv)!=NULL)
 					{
-#ifdef DEBUG
-					M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, (M2MString *)"規程のディレクトリに設置されたファイルからCSV形式の入力データを取得しました");
-#endif // DEBUG
+					M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"規程のディレクトリに設置されたファイルからCSV形式の入力データを取得しました");
 					//===== CEPデータベースへ挿入 =====
 					M2MCEP_insertCSV(cep, tableName, csv);
-#ifdef DEBUG
-					M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, (M2MString *)"CSV形式の入力データをSQLite3データベースに挿入しました");
-					M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, (M2MString *)"CEPを実行します");
-#endif // DEBUG
+					M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"CSV形式の入力データをSQLite3データベースに挿入しました");
+					M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"CEPを実行します");
 					//===== CEP実行 =====
 					if (M2MCEP_select(cep, sql, &result)!=NULL)
 						{
-#ifdef DEBUG
-						M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, (M2MString *)"CEP実行結果のCSV形式の文字列を規程ディレクトリのファイルに出力します");
-#endif // DEBUG
+						M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"CEP実行結果のCSV形式の文字列を規程ディレクトリのファイルに出力します");
 						//===== CEP実行結果を出力 =====
-						this_setResult(result, M2MString_length(result));
+						this_setResult(cep, result, M2MString_length(result));
 						//===== メモリ領域の解放 =====
 						M2MHeap_free(result);
 						}
 					//===== CEPで条件に合致するデータが存在しなかった場合 =====
 					else
 						{
-#ifdef DEBUG
-						M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, (M2MString *)"CEPで合致するレコードが見つかりませんでした");
-#endif // DEBUG
+						M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"CEPで合致するレコードが見つかりませんでした");
 						}
 					//===== メモリ領域の解放 =====
 					M2MHeap_free(csv);
@@ -173,37 +166,32 @@ static void this_execute (M2MCEP *cep, const M2MString *tableName, const M2MStri
 				//===== CSV形式のレコードを取得しなかった場合 =====
 				else if (csv==NULL)
 					{
-#ifdef DEBUG
-					M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, (M2MString *)"規程のディレクトリに設置された入力ファイルが見つかりませんでした");
-#endif // DEBUG
+					M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"規程のディレクトリに設置された入力ファイルが見つかりませんでした");
 					}
 				}
 			//===== 出力ファイルが規程ディレクトリ内に存在する場合 =====
 			else
 				{
-#ifdef DEBUG
-				M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, (M2MString *)"規程のディレクトリに設置された出力ファイルが存在するためCEPは実行しません");
-#endif // DEBUG
+				M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"規程のディレクトリに設置された出力ファイルが存在するためCEPは実行しません");
 				}
 			//===== 一定時間スリープ =====
-			this_sleep(sleepTime);
-#ifdef DEBUG
-			M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, (M2MString *)"CEPを繰り返します");
-#endif // DEBUG
+			this_sleep(cep, sleepTime);
+			M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"CEPを繰り返します");
 			}
+		M2MFile_delete(&outputFile);
 		}
 	//===== Argument error =====
 	else if (cep==NULL)
 		{
-		M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, (M2MString *)"引数で指定されたCEP実行オブジェクトがNULLです", NULL);
+		M2MLogger_error(NULL, METHOD_NAME, __LINE__, (M2MString *)"引数で指定されたCEP実行オブジェクトがNULLです");
 		}
 	else if (tableName==NULL || M2MString_length(tableName)<=0)
 		{
-		M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, (M2MString *)"引数で指定されたテーブル名がNULLです", NULL);
+		M2MLogger_error(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"引数で指定されたテーブル名がNULLです");
 		}
 	else
 		{
-		M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, (M2MString *)"引数で指定されたSQLを示す文字列がNULL，または文字列数が0以下です", NULL);
+		M2MLogger_error(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"引数で指定されたSQLを示す文字列がNULL，または文字列数が0以下です");
 		}
 	return;
 	}
@@ -225,39 +213,39 @@ static void this_execute (M2MCEP *cep, const M2MString *tableName, const M2MStri
  * @param[out] csv	CSV形式の入力データをコピーするためのポインタ(関数内部でヒープメモリを獲得する)
  * @return			コピーした入力データのポインタ or NULL(エラーの場合)
  */
-static M2MString *this_getCSV (M2MString **csv)
+static M2MString *this_getCSV (const M2MCEP *cep, M2MString **csv)
 	{
 	//========== Variable ==========
 	M2MString *inputData = NULL;
 	M2MString FILE_PATH[PATH_MAX];
-	FILE *file = NULL;
+	M2MFile *inputFile = NULL;
 	M2MString MESSAGE[256];
 	const M2MString *INPUT_FILE_PATH = this_getInputFilePath(FILE_PATH, sizeof(FILE_PATH));
 	const M2MString *METHOD_NAME = (M2MString *)"CEPCUI.this_getCSV()";
 
 	//===== Check argument =====
-	if (csv!=NULL)
+	if (csv!=NULL && (inputFile=M2MFile_new(INPUT_FILE_PATH))!=NULL)
 		{
 		//===== 入力ファイルが存在する場合 =====
-		if (M2MFile_exists(INPUT_FILE_PATH)==true)
+		if (M2MFile_exists(inputFile)==true)
 			{
 			//===== 入力ファイルを開く =====
-			if ((file=M2MFile_open(INPUT_FILE_PATH, true))!=NULL)
+			if (M2MFile_open(inputFile)!=NULL)
 				{
 				//===== CSV形式の入力データをファイルから取得 =====
-				if (M2MFile_read(file, &inputData)!=NULL)
+				if (M2MFile_read(inputFile, &inputData)>0)
 					{
 					//===== ファイルを閉じる =====
-					M2MFile_close(file);
+					M2MFile_close(inputFile);
 					}
 				//===== Error handling =====
 				else
 					{
 					memset(MESSAGE, 0, sizeof(MESSAGE));
 					snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"規程のディレクトリの入力ファイル(=\"%s\")からのデータ読み取りに失敗しました", INPUT_FILE_PATH);
-					M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, MESSAGE, NULL);
+					M2MLogger_error(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, MESSAGE);
 					//===== ファイルを閉じる =====
-					M2MFile_close(file);
+					M2MFile_close(inputFile);
 					}
 				//===== 改行コードを補正 =====
 				if (M2MString_convertFromLFToCRLF(inputData, csv)!=NULL)
@@ -274,7 +262,8 @@ static M2MString *this_getCSV (M2MString **csv)
 						// 何もしない
 						}
 					//===== 入力ファイルを削除 =====
-					M2MFile_remove(INPUT_FILE_PATH);
+					M2MFile_remove(inputFile);
+					M2MFile_delete(&inputFile);
 					//===== 正常終了 =====
 					return (*csv);
 					}
@@ -292,33 +281,32 @@ static M2MString *this_getCSV (M2MString **csv)
 						{
 						// 何もしない
 						}
+					M2MFile_delete(&inputFile);
 					return NULL;
 					}
 				}
 			//===== Error handling =====
 			else
 				{
-#ifdef DEBUG
 				memset(MESSAGE, 0, sizeof(MESSAGE));
 				snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"規程のディレクトリに入力ファイル(=\"%s\")が存在しません", INPUT_FILE_PATH);
-				M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, MESSAGE);
-#endif // DEBUG
+				M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, MESSAGE);
+				M2MFile_delete(&inputFile);
 				return NULL;
 				}
 			}
 		//===== 入力ファイルが存在しない場合 =====
 		else
 			{
-#ifdef DEBUG
-			M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, (M2MString *)"規程のディレクトリに入力ファイルが存在しません");
-#endif // DEBUG
+			M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"規程のディレクトリに入力ファイルが存在しません");
+			M2MFile_delete(&inputFile);
 			return NULL;
 			}
 		}
 	//===== Argument error =====
 	else
 		{
-		M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, (M2MString *)"引数で指定されたCSV形式の入力データをコピーするためのポインタがNULLです", NULL);
+		M2MLogger_error(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"引数で指定されたCSV形式の入力データをコピーするためのポインタがNULLです");
 		return NULL;
 		}
 	}
@@ -350,12 +338,12 @@ static M2MString *this_getInputFilePath (M2MString filePath[], const size_t file
 	//===== Argument error =====
 	else if (filePath==NULL)
 		{
-		M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, (M2MString *)"引数で指定された入力ファイルパス文字列をコピーするためのバッファがNULLです", NULL);
+		M2MLogger_error(METHOD_NAME, __LINE__, (M2MString *)"引数で指定された入力ファイルパス文字列をコピーするためのバッファがNULLです", NULL);
 		return NULL;
 		}
 	else
 		{
-		M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, (M2MString *)"引数で指定された入力ファイルパス文字列をコピーするためのバッファサイズ[Byte]が0以下です", NULL);
+		M2MLogger_error(METHOD_NAME, __LINE__, (M2MString *)"引数で指定された入力ファイルパス文字列をコピーするためのバッファサイズ[Byte]が0以下です", NULL);
 		return NULL;
 		}
 	}
@@ -387,12 +375,12 @@ static M2MString *this_getOutputFilePath (M2MString filePath[], const size_t fil
 	//===== Argument error =====
 	else if (filePath==NULL)
 		{
-		M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, (M2MString *)"引数で指定された出力ファイルパス文字列をコピーするためのバッファがNULLです", NULL);
+		M2MLogger_error(METHOD_NAME, __LINE__, (M2MString *)"引数で指定された出力ファイルパス文字列をコピーするためのバッファがNULLです", NULL);
 		return NULL;
 		}
 	else
 		{
-		M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, (M2MString *)"引数で指定された出力ファイルパス文字列をコピーするためのバッファサイズ[Byte]が0以下です", NULL);
+		M2MLogger_error(METHOD_NAME, __LINE__, (M2MString *)"引数で指定された出力ファイルパス文字列をコピーするためのバッファサイズ[Byte]が0以下です", NULL);
 		return NULL;
 		}
 	}
@@ -410,7 +398,7 @@ static M2MString *this_getSelectSQL (M2MString **sql)
 	{
 	//========== Variable ==========
 	M2MString INPUT_FILE_PATH[PATH_MAX];
-	FILE *file = NULL;
+	M2MFile *file = NULL;
 	M2MString MESSAGE[256];
 	const M2MString *HOME_DIRECTORY = M2MDirectory_getHomeDirectoryPath();
 	const M2MString *CEP_DIRECTORY = (M2MString *)M2MCEP_DIRECTORY;
@@ -418,18 +406,18 @@ static M2MString *this_getSelectSQL (M2MString **sql)
 	const M2MString *METHOD_NAME = (M2MString *)"CEPCUI.this_getSelectSQL()";
 
 	//===== Check argument =====
-	if (sql!=NULL)
+	if (sql!=NULL && (file=M2MFile_new(INPUT_FILE_PATH))!=NULL)
 		{
 		//===== 入力ファイルパスを作成 =====
 		memset(INPUT_FILE_PATH, 0, sizeof(INPUT_FILE_PATH));
 		snprintf(INPUT_FILE_PATH, sizeof(INPUT_FILE_PATH)-1, (M2MString *)"%s/%s/%s", HOME_DIRECTORY, CEP_DIRECTORY, FILE_NAME);
 		//===== 入力ファイルを開く =====
-		if (M2MFile_exists(INPUT_FILE_PATH)==true)
+		if (M2MFile_exists(file)==true)
 			{
-			if ((file=M2MFile_open(INPUT_FILE_PATH, true))!=NULL)
+			if (M2MFile_open(file)!=NULL)
 				{
 				//===== CSV形式の入力データをファイルから取得 =====
-				if (M2MFile_read(file, sql)!=NULL)
+				if (M2MFile_read(file, sql)>0)
 					{
 					//===== ファイルを閉じる =====
 					M2MFile_close(file);
@@ -439,11 +427,12 @@ static M2MString *this_getSelectSQL (M2MString **sql)
 					{
 					memset(MESSAGE, 0, sizeof(MESSAGE));
 					snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"規程のディレクトリの入力ファイル(=\"%s\")からデータ読み取りに失敗しました", INPUT_FILE_PATH);
-					M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, MESSAGE, NULL);
+					M2MLogger_error(NULL, METHOD_NAME, __LINE__, MESSAGE);
 					//===== ファイルを閉じる =====
 					M2MFile_close(file);
 					}
 				//===== 正常終了 =====
+				M2MFile_delete(&file);
 				return (*sql);
 				}
 			//===== Error handling =====
@@ -451,24 +440,24 @@ static M2MString *this_getSelectSQL (M2MString **sql)
 				{
 				memset(MESSAGE, 0, sizeof(MESSAGE));
 				snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"規程のディレクトリの入力ファイル(=\"%s\")のオープン処理に失敗しました", INPUT_FILE_PATH);
-				M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, MESSAGE, NULL);
+				M2MLogger_error(NULL, METHOD_NAME, __LINE__, MESSAGE);
+				M2MFile_delete(&file);
 				return NULL;
 				}
 			}
 		else
 			{
-#ifdef DEBUG
 			memset(MESSAGE, 0, sizeof(MESSAGE));
-			snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"規程のディレクトリの入力ファイル(=\"%s\")が見つかりません", INPUT_FILE_PATH);
-			M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, MESSAGE);
-#endif // DEBUG
+			snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"The input file(=\"%s\") on regulation directory can't be found", INPUT_FILE_PATH);
+			M2MLogger_error(NULL, METHOD_NAME, __LINE__, MESSAGE);
+			M2MFile_delete(&file);
 			return NULL;
 			}
 		}
 	//===== Argument error =====
 	else
 		{
-		M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, (M2MString *)"引数で指定されたSELECT用SQL文字列をコピーするためのポインタがNULLです", NULL);
+		M2MLogger_error(NULL, METHOD_NAME, __LINE__, (M2MString *)"引数で指定されたSELECT用SQL文字列をコピーするためのポインタがNULLです");
 		return NULL;
 		}
 	}
@@ -481,10 +470,10 @@ static M2MString *this_getSelectSQL (M2MString **sql)
  * @param[in] resultLength	CSV形式のCEP処理結果データを示す文字列サイズ[Byte]
  * @return					true : ファイル出力に成功、false : ファイル出力に失敗
  */
-static bool this_setResult (const M2MString *result, const size_t resultLength)
+static bool this_setResult (const M2MCEP *cep, const M2MString *result, const size_t resultLength)
 	{
 	//========== Variable ==========
-	FILE *file = NULL;
+	M2MFile *file = NULL;
 	M2MString FILE_PATH[PATH_MAX];
 	M2MString MESSAGE[256];
 	const M2MString *OUTPUT_FILE_PATH = this_getOutputFilePath(FILE_PATH, sizeof(FILE_PATH));
@@ -494,14 +483,15 @@ static bool this_setResult (const M2MString *result, const size_t resultLength)
 	if (result!=NULL && resultLength)
 		{
 		//===== 出力ファイルパスの確認 =====
-		if (OUTPUT_FILE_PATH!=NULL)
+		if (OUTPUT_FILE_PATH!=NULL && (file=M2MFile_new(OUTPUT_FILE_PATH))!=NULL)
 			{
 			//===== 出力ファイルを新規に開く =====
-			if ((file=M2MFile_open(OUTPUT_FILE_PATH, true))!=NULL)
+			if ((file=M2MFile_open(file))!=NULL)
 				{
 				//===== 出力ファイルにデータ出力 =====
 				M2MFile_write(file, result, resultLength);
 				M2MFile_close(file);
+				M2MFile_delete(&file);
 				return true;
 				}
 			//===== Error handling =====
@@ -509,26 +499,27 @@ static bool this_setResult (const M2MString *result, const size_t resultLength)
 				{
 				memset(MESSAGE, 0, sizeof(MESSAGE));
 				snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"出力ファイル(=\"%s\")のオープンに失敗しました", OUTPUT_FILE_PATH);
-				M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, MESSAGE, NULL);
+				M2MLogger_error(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, MESSAGE);
+				M2MFile_delete(&file);
 				return false;
 				}
 			}
 		//===== Error handling =====
 		else
 			{
-			M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, (M2MString *)"出力ファイルパスを示す文字列がNULLです", NULL);
+			M2MLogger_error(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"出力ファイルパスを示す文字列がNULLです");
 			return false;
 			}
 		}
 	//===== Argument error =====
 	else if (result==NULL)
 		{
-		M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, (M2MString *)"引数で指定された結果を示すCSV形式の文字列がNULLです", NULL);
+		M2MLogger_error(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"引数で指定された結果を示すCSV形式の文字列がNULLです");
 		return false;
 		}
 	else
 		{
-		M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, (M2MString *)"引数で指定された結果を示すCSV形式の文字列数が0以下です", NULL);
+		M2MLogger_error(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"引数で指定された結果を示すCSV形式の文字列数が0以下です");
 		return false;
 		}
 	}
@@ -539,13 +530,11 @@ static bool this_setResult (const M2MString *result, const size_t resultLength)
  *
  * @param[in] time	スリープ時間[usec]
  */
-static void this_sleep (unsigned long time)
+static void this_sleep (const M2MCEP *cep, unsigned long time)
 	{
 	//========== Variable ==========
-#ifdef DEBUG
 	M2MString MESSAGE[128];
 	const M2MString *METHOD_NAME = (M2MString *)"CEPCUI.this_sleep()";
-#endif // DEBUG
 	const unsigned long DEFAULT_SLEEP_TIME = 15000000;
 
 	//===== Check argument =====
@@ -559,11 +548,9 @@ static void this_sleep (unsigned long time)
 		//===== スリープ時間をデフォルト値にセット =====
 		time = DEFAULT_SLEEP_TIME;
 		}
-#ifdef DEBUG
 	memset(MESSAGE, 0, sizeof(MESSAGE));
 	snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"\"%lu\"[usec]の間スリープします", time);
-	M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, MESSAGE);
-#endif // DEBUG
+	M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, MESSAGE);
 	//===== スリープ =====
 	usleep(time);
 	return;
@@ -578,14 +565,13 @@ static void this_sleep (unsigned long time)
  *
  * @return	true : 中止する，false : 処理を継続する
  */
-static bool this_stop ()
+static bool this_stop (const M2MCEP *cep)
 	{
 	//========== Variable ==========
+	M2MFile *file = NULL;
 	M2MString FILE_PATH[256];
-#ifdef DEBUG
 	M2MString MESSAGE[256];
 	const M2MString *METHOD_NAME = (M2MString *)"CEPCUI.this_stop()";
-#endif // DEBUG
 	const M2MString *HOME_DIRECTORY = M2MDirectory_getHomeDirectoryPath();
 	const M2MString *CEP_DIRECTORY = (M2MString *)M2MCEP_DIRECTORY;
 	const M2MString *FILE_NAME = (M2MString *)"cepcui.stop";
@@ -594,24 +580,30 @@ static bool this_stop ()
 	memset(FILE_PATH, 0, sizeof(FILE_PATH));
 	snprintf(FILE_PATH, sizeof(FILE_PATH)-1, (M2MString *)"%s/%s/%s", HOME_DIRECTORY, CEP_DIRECTORY, FILE_NAME);
 
-	//===== 中止ファイルが存在している場合 =====
-	if (M2MFile_exists(FILE_PATH)==true)
+	if ((file=M2MFile_new(FILE_PATH))!=NULL)
 		{
-#ifdef DEBUG
-		memset(MESSAGE, 0, sizeof(MESSAGE));
-		snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"ループ処理を中止するためのファイル（＝\"%s\")が存在するため，処理を中止します", FILE_PATH);
-		M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, MESSAGE);
-#endif // DEBUG
-		return true;
+		//===== 中止ファイルが存在している場合 =====
+		if (M2MFile_exists(file)==true)
+			{
+			memset(MESSAGE, 0, sizeof(MESSAGE));
+			snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"ループ処理を中止するためのファイル（＝\"%s\")が存在するため，処理を中止します", FILE_PATH);
+			M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, MESSAGE);
+			M2MFile_delete(&file);
+			return true;
+			}
+		//===== 中止ファイルが存在しない場合 =====
+		else
+			{
+			memset(MESSAGE, 0, sizeof(MESSAGE));
+			snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"ループ処理を中止するためのファイル（＝\"%s\")が存在しないため，処理を継続します", FILE_PATH);
+			M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, MESSAGE);
+			M2MFile_delete(&file);
+			return false;
+			}
 		}
-	//===== 中止ファイルが存在しない場合 =====
 	else
 		{
-#ifdef DEBUG
-		memset(MESSAGE, 0, sizeof(MESSAGE));
-		snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"ループ処理を中止するためのファイル（＝\"%s\")が存在しないため，処理を継続します", FILE_PATH);
-		M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, MESSAGE);
-#endif // DEBUG
+		M2MLogger_error(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"Failed to create new \"M2MFile\" structure object");
 		return false;
 		}
 	}
@@ -659,21 +651,21 @@ static bool this_stop ()
 int main (int argc, char **argv)
 	{
 	//========== Variable ==========
-	long sleepTime = 0;												// Sleep time[usec]
-	int maxRecord = 0;												// Maximum number of accumulated records in SQLite3 memory database
+	uint32_t sleepTime = 0;											// Sleep time[usec]
+	int32_t maxRecord = 0;											// Maximum number of accumulated records in SQLite3 memory database
 	M2MCEP *cep = NULL;												// CEP object
 	M2MTableManager *tableManager = NULL;							// Table information object
 	M2MColumnList *columnList = NULL;								// Column information object
 	M2MString *sql = NULL;											// SELECT SQL string
 	const M2MString *TABLE_NAME = (M2MString *)"cep_test";			// Table name
 	const M2MString *DATABASE_NAME = (M2MString *)"cep";			// Database file name
-	const M2MString *METHOD_NAME = (M2MString *)"CEPCUI.main()";	// Method name
+	const M2MString *FUNCTION_NAME = (M2MString *)"CEPCUI.main()";	// Method name
 
 	//===== When one argument is specified =====
-	if (argc==1)
+	if (argc==2)
 		{
 		//===== Get sleep time =====
-		if ((sleepTime=M2MString_convertFromStringToLong(argv[1], M2MString_length(argv[1])))>0)
+		if ((sleepTime=M2MString_convertFromStringToUnsignedLong(argv[1], M2MString_length(argv[1])))>0)
 			{
 			}
 		//===== Error handling =====
@@ -683,10 +675,10 @@ int main (int argc, char **argv)
 			}
 		}
 	//===== When two or more arguments are specified =====
-	else if (argc>=2)
+	else if (argc>=3)
 		{
 		//===== Get sleep time =====
-		if ((sleepTime=M2MString_convertFromStringToLong(argv[1], M2MString_length(argv[1])))>0)
+		if ((sleepTime=M2MString_convertFromStringToUnsignedLong(argv[1], M2MString_length(argv[1])))>0)
 			{
 			}
 		//===== Error handling =====
@@ -709,17 +701,15 @@ int main (int argc, char **argv)
 		{
 		// do nothing
 		}
-#ifdef DEBUG
-	M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, (M2MString *)"********** Startup the CEP sample program **********");
-#endif // DEBUG
+	M2MLogger_error(NULL, FUNCTION_NAME, __LINE__, (M2MString *)"********** Startup CEP sample program **********");
 	//===== Get SELECT SQL string =====
 	if (this_getSelectSQL(&sql)!=NULL)
 		{
 		//===== Create new CEP database =====
 		if ((columnList=M2MColumnList_new())!=NULL
-				&& M2MColumnList_add(columnList, (M2MString *)"date", M2M_DATA_TYPE_DATETIME, false, false, false, false)!=NULL
-				&& M2MColumnList_add(columnList, (M2MString *)"name", M2M_DATA_TYPE_TEXT, false, false, false, false)!=NULL
-				&& M2MColumnList_add(columnList, (M2MString *)"value", M2M_DATA_TYPE_DOUBLE, false, false, false, false)!=NULL
+				&& M2MColumnList_add(columnList, (M2MString *)"date", M2MSQLiteDataType_DATETIME, false, false, false, false)!=NULL
+				&& M2MColumnList_add(columnList, (M2MString *)"name", M2MSQLiteDataType_TEXT, false, false, false, false)!=NULL
+				&& M2MColumnList_add(columnList, (M2MString *)"value", M2MSQLiteDataType_DOUBLE, false, false, false, false)!=NULL
 				&& (tableManager=M2MTableManager_new())!=NULL
 				&& M2MTableManager_setConfig(tableManager, TABLE_NAME, columnList)!=NULL
 				&& (cep=M2MCEP_new(DATABASE_NAME, tableManager))!=NULL)
@@ -743,7 +733,7 @@ int main (int argc, char **argv)
 		//===== Error handling =====
 		else
 			{
-			M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, (M2MString *)"Failed to construct CEP database", NULL);
+			M2MLogger_error(NULL, FUNCTION_NAME, __LINE__, (M2MString *)"Failed to construct CEP database");
 			//===== Release heap memory for SQL string =====
 			M2MHeap_free(sql);
 			}
@@ -751,11 +741,9 @@ int main (int argc, char **argv)
 	//===== Error handling =====
 	else
 		{
-		M2MLogger_printErrorMessage(METHOD_NAME, __LINE__, (M2MString *)"Failed to get SQL string for CEP table search", NULL);
+		M2MLogger_error(NULL, FUNCTION_NAME, __LINE__, (M2MString *)"Failed to get SQL string for CEP table search");
 		}
-#ifdef DEBUG
-	M2MLogger_printDebugMessage(METHOD_NAME, __LINE__, (M2MString *)"********** Quit the CEP sample program **********");
-#endif // DEBUG
+	M2MLogger_error(NULL, FUNCTION_NAME, __LINE__, (M2MString *)"********** Quit CEP sample program **********");
 	return 0;
 	}
 
