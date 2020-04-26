@@ -28,12 +28,12 @@
  ******************************************************************************/
 
 #include "m2m/cep/M2MCEP.h"
-#include "m2m/db/M2MColumnList.h"
-#include "m2m/db/M2MSQLiteDataType.h"
-#include "m2m/db/M2MTableManager.h"
-#include "m2m/io/M2MHeap.h"
-#include "m2m/lang/M2MString.h"
-#include "m2m/log/M2MFileAppender.h"
+#include "m2m/lib/db/M2MColumnList.h"
+#include "m2m/lib/db/M2MSQLiteDataType.h"
+#include "m2m/lib/db/M2MTableManager.h"
+#include "m2m/lib/io/M2MHeap.h"
+#include "m2m/lib/lang/M2MString.h"
+#include "m2m/lib/log/M2MFileAppender.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -72,6 +72,16 @@ static M2MString *this_getInputFilePath (M2MString filePath[], const size_t file
  * @return						出力ファイルパス文字列をコピーしたバッファのポインタ or NULL(エラーの場合)
  */
 static unsigned char *this_getOutputFilePath (M2MString filePath[], const size_t filePathLength);
+
+
+/**
+ * Get the SQL file path in the regulation directory.<br>
+ *
+ * @param[out] filePath			Buffer for copying the SQL file path string
+ * @param[in] filePathLength	Size of buffer[Byte]
+ * @return						Pointer of the buffer which the SQL file path string was copied or NULL (in case of error)
+ */
+static M2MString *this_getSelectSQLFilePath (M2MString filePath[], const size_t filePathLength);
 
 
 /**
@@ -120,15 +130,16 @@ static void this_execute (M2MCEP *cep, const M2MString *tableName, const M2MStri
 	M2MString *csv = NULL;
 	M2MString *result = NULL;
 	M2MString FILE_PATH[PATH_MAX];
+	M2MString *outputFilePath = NULL;
 	M2MFile *outputFile = NULL;
-	const M2MString *OUTPUT_FILE_PATH = this_getOutputFilePath(FILE_PATH, sizeof(FILE_PATH));
 	const M2MString *METHOD_NAME = (M2MString *)"CEPCUI.this_execute()";
 
 	//===== Check argument =====
 	if (cep!=NULL
 			&& tableName!=NULL && M2MString_length(tableName)>0
 			&& sql!=NULL && M2MString_length(sql)>0
-			&& (outputFile=M2MFile_new(OUTPUT_FILE_PATH))!=NULL)
+			&& (outputFilePath=this_getOutputFilePath(FILE_PATH, sizeof(FILE_PATH)))!=NULL
+			&& (outputFile=M2MFile_new(outputFilePath))!=NULL)
 		{
 		M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"一定間隔でCEPを繰り返すループ処理を開始します");
 		//===== 無限ループ =====
@@ -313,76 +324,70 @@ static M2MString *this_getCSV (const M2MCEP *cep, M2MString **csv)
 
 
 /**
- * 規程ディレクトリ配下の入力ファイルパスを取得する。<br>
+ * Get the file path in the regulation directory.<br>
  *
- * @param[out] filePath			入力ファイルパス文字列をコピーするためのバッファ
- * @param[in] filePathLength	バッファサイズ[Byte]
- * @return						入力ファイルパス文字列をコピーしたバッファのポインタ or NULL(エラーの場合)
+ * @param[out] filePath			Buffer for copying the file path string
+ * @param[in] filePathLength	Size of buffer[Byte]
+ * @param[in] fileName			The file name string
+ * @return						Pointer of the buffer which the file path string was copied or NULL (in case of error)
  */
-static M2MString *this_getInputFilePath (M2MString filePath[], const size_t filePathLength)
+static M2MString *this_getFilePath (M2MString filePath[], const size_t filePathLength, const M2MString fileName[])
 	{
 	//========== Variable ==========
 	const M2MString *HOME_DIRECTORY = M2MDirectory_getHomeDirectoryPath();
-	const M2MString *CEP_DIRECTORY = (M2MString *)M2MCEP_DIRECTORY;
-	const M2MString *FILE_NAME = (M2MString *)"input.csv";
-	const M2MString *METHOD_NAME = (M2MString *)"CEPCUI.this_getInputFilePath()";
+	const M2MString *METHOD_NAME = (M2MString *)"CEPCUI.this_getFilePath()";
 
 	//===== Check argument =====
 	if (filePath!=NULL && filePathLength>0)
 		{
-		//===== 入力ファイルパスを作成 =====
+		//===== Create new file pathname string =====
 		memset(filePath, 0, filePathLength);
-		snprintf(filePath, filePathLength-1, (M2MString *)"%s/%s/%s", HOME_DIRECTORY, CEP_DIRECTORY, FILE_NAME);
+		snprintf(filePath, filePathLength-1, (M2MString *)"%s/%s/%s", HOME_DIRECTORY, M2MCEP_DIRECTORY, fileName);
 		return filePath;
 		}
 	//===== Argument error =====
 	else if (filePath==NULL)
 		{
-		M2MLogger_error(METHOD_NAME, __LINE__, (M2MString *)"引数で指定された入力ファイルパス文字列をコピーするためのバッファがNULLです", NULL);
+		M2MLogger_error(NULL, METHOD_NAME, __LINE__, (M2MString *)"Argument error! Indicated \"filePath\" buffer is NULL");
 		return NULL;
 		}
 	else
 		{
-		M2MLogger_error(METHOD_NAME, __LINE__, (M2MString *)"引数で指定された入力ファイルパス文字列をコピーするためのバッファサイズ[Byte]が0以下です", NULL);
+		M2MLogger_error(NULL, METHOD_NAME, __LINE__, (M2MString *)"Argument error! Size of indicated \"filePath\" buffer is 0[Byte] or less");
 		return NULL;
 		}
 	}
 
 
 /**
- * 規程ディレクトリ配下の出力ファイルパスを取得する。<br>
+ * Get the input file path in the regulation directory.<br>
  *
- * @param[out] filePath			出力ファイルパス文字列をコピーするためのバッファ
- * @param[in] filePathLength	バッファサイズ[Byte]
- * @return						出力ファイルパス文字列をコピーしたバッファのポインタ or NULL(エラーの場合)
+ * @param[out] filePath			Buffer for copying the input file path string
+ * @param[in] filePathLength	Size of buffer[Byte]
+ * @return						Pointer of the buffer which the input file path string was copied or NULL (in case of error)
+ */
+static M2MString *this_getInputFilePath (M2MString filePath[], const size_t filePathLength)
+	{
+	//========== Variable ==========
+	const M2MString *FILE_NAME = (M2MString *)"input.csv";
+
+	return this_getFilePath(filePath, filePathLength, FILE_NAME);
+	}
+
+
+/**
+ * Get the output file path in the regulation directory.<br>
+ *
+ * @param[out] filePath			Buffer for copying the output file path string
+ * @param[in] filePathLength	Size of buffer[Byte]
+ * @return						Pointer of the buffer which the output file path string was copied or NULL (in case of error)
  */
 static M2MString *this_getOutputFilePath (M2MString filePath[], const size_t filePathLength)
 	{
 	//========== Variable ==========
-	const M2MString *HOME_DIRECTORY = M2MDirectory_getHomeDirectoryPath();
-	const M2MString *CEP_DIRECTORY = (M2MString *)M2MCEP_DIRECTORY;
 	const M2MString *FILE_NAME = (M2MString *)"output.csv";
-	const M2MString *METHOD_NAME = (M2MString *)"CEPCUI.this_getOutputFilePath()";
 
-	//===== Check argument =====
-	if (filePath!=NULL && filePathLength>0)
-		{
-		//===== 出力ファイルパスの作成 =====
-		memset(filePath, 0, filePathLength);
-		snprintf(filePath, filePathLength-1, (M2MString *)"%s/%s/%s", HOME_DIRECTORY, CEP_DIRECTORY, FILE_NAME);
-		return filePath;
-		}
-	//===== Argument error =====
-	else if (filePath==NULL)
-		{
-		M2MLogger_error(METHOD_NAME, __LINE__, (M2MString *)"引数で指定された出力ファイルパス文字列をコピーするためのバッファがNULLです", NULL);
-		return NULL;
-		}
-	else
-		{
-		M2MLogger_error(METHOD_NAME, __LINE__, (M2MString *)"引数で指定された出力ファイルパス文字列をコピーするためのバッファサイズ[Byte]が0以下です", NULL);
-		return NULL;
-		}
+	return this_getFilePath(filePath, filePathLength, FILE_NAME);
 	}
 
 
@@ -397,60 +402,57 @@ static M2MString *this_getOutputFilePath (M2MString filePath[], const size_t fil
 static M2MString *this_getSelectSQL (M2MString **sql)
 	{
 	//========== Variable ==========
-	M2MString INPUT_FILE_PATH[PATH_MAX];
-	M2MFile *file = NULL;
+	M2MString FILE_PATH[PATH_MAX];
+	M2MString *sqlFilePath = NULL;
+	M2MFile *sqlFile = NULL;
 	M2MString MESSAGE[256];
-	const M2MString *HOME_DIRECTORY = M2MDirectory_getHomeDirectoryPath();
-	const M2MString *CEP_DIRECTORY = (M2MString *)M2MCEP_DIRECTORY;
-	const M2MString *FILE_NAME = (M2MString *)"select.sql";
 	const M2MString *METHOD_NAME = (M2MString *)"CEPCUI.this_getSelectSQL()";
 
 	//===== Check argument =====
-	if (sql!=NULL && (file=M2MFile_new(INPUT_FILE_PATH))!=NULL)
+	if (sql!=NULL 
+			&& (sqlFilePath=this_getSelectSQLFilePath(FILE_PATH, sizeof(FILE_PATH)))!=NULL
+			&& (sqlFile=M2MFile_new(sqlFilePath))!=NULL)
 		{
-		//===== 入力ファイルパスを作成 =====
-		memset(INPUT_FILE_PATH, 0, sizeof(INPUT_FILE_PATH));
-		snprintf(INPUT_FILE_PATH, sizeof(INPUT_FILE_PATH)-1, (M2MString *)"%s/%s/%s", HOME_DIRECTORY, CEP_DIRECTORY, FILE_NAME);
 		//===== 入力ファイルを開く =====
-		if (M2MFile_exists(file)==true)
+		if (M2MFile_exists(sqlFile)==true)
 			{
-			if (M2MFile_open(file)!=NULL)
+			if (M2MFile_open(sqlFile)!=NULL)
 				{
 				//===== CSV形式の入力データをファイルから取得 =====
-				if (M2MFile_read(file, sql)>0)
+				if (M2MFile_read(sqlFile, sql)>0)
 					{
 					//===== ファイルを閉じる =====
-					M2MFile_close(file);
+					M2MFile_close(sqlFile);
 					}
 				//===== Error handling =====
 				else
 					{
 					memset(MESSAGE, 0, sizeof(MESSAGE));
-					snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"規程のディレクトリの入力ファイル(=\"%s\")からデータ読み取りに失敗しました", INPUT_FILE_PATH);
+					snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"規程のディレクトリの入力ファイル(=\"%s\")からデータ読み取りに失敗しました", sqlFilePath);
 					M2MLogger_error(NULL, METHOD_NAME, __LINE__, MESSAGE);
 					//===== ファイルを閉じる =====
-					M2MFile_close(file);
+					M2MFile_close(sqlFile);
 					}
 				//===== 正常終了 =====
-				M2MFile_delete(&file);
+				M2MFile_delete(&sqlFile);
 				return (*sql);
 				}
 			//===== Error handling =====
 			else
 				{
 				memset(MESSAGE, 0, sizeof(MESSAGE));
-				snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"規程のディレクトリの入力ファイル(=\"%s\")のオープン処理に失敗しました", INPUT_FILE_PATH);
+				snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"規程のディレクトリの入力ファイル(=\"%s\")のオープン処理に失敗しました", sqlFilePath);
 				M2MLogger_error(NULL, METHOD_NAME, __LINE__, MESSAGE);
-				M2MFile_delete(&file);
+				M2MFile_delete(&sqlFile);
 				return NULL;
 				}
 			}
 		else
 			{
 			memset(MESSAGE, 0, sizeof(MESSAGE));
-			snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"The input file(=\"%s\") on regulation directory can't be found", INPUT_FILE_PATH);
+			snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"The input file(=\"%s\") on regulation directory can't be found", sqlFilePath);
 			M2MLogger_error(NULL, METHOD_NAME, __LINE__, MESSAGE);
-			M2MFile_delete(&file);
+			M2MFile_delete(&sqlFile);
 			return NULL;
 			}
 		}
@@ -460,6 +462,38 @@ static M2MString *this_getSelectSQL (M2MString **sql)
 		M2MLogger_error(NULL, METHOD_NAME, __LINE__, (M2MString *)"引数で指定されたSELECT用SQL文字列をコピーするためのポインタがNULLです");
 		return NULL;
 		}
+	}
+
+
+/**
+ * Get the SQL file path in the regulation directory.<br>
+ *
+ * @param[out] filePath			Buffer for copying the SQL file path string
+ * @param[in] filePathLength	Size of buffer[Byte]
+ * @return						Pointer of the buffer which the SQL file path string was copied or NULL (in case of error)
+ */
+static M2MString *this_getSelectSQLFilePath (M2MString filePath[], const size_t filePathLength)
+	{
+	//========== Variable ==========
+	const M2MString *FILE_NAME = (M2MString *)"select.sql";
+
+	return this_getFilePath(filePath, filePathLength, FILE_NAME);
+	}
+
+
+/**
+ * Get the stop file path in the regulation directory.<br>
+ *
+ * @param[out] filePath			Buffer for copying the stop file path string
+ * @param[in] filePathLength	Size of buffer[Byte]
+ * @return						Pointer of the buffer which the stop file path string was copied or NULL (in case of error)
+ */
+static M2MString *this_getStopFilePath (M2MString filePath[], const size_t filePathLength)
+	{
+	//========== Variable ==========
+	const M2MString *FILE_NAME = (M2MString *)"cepcui.stop";
+
+	return this_getFilePath(filePath, filePathLength, FILE_NAME);
 	}
 
 
@@ -568,27 +602,23 @@ static void this_sleep (const M2MCEP *cep, unsigned long time)
 static bool this_stop (const M2MCEP *cep)
 	{
 	//========== Variable ==========
-	M2MFile *file = NULL;
-	M2MString FILE_PATH[256];
+	M2MString *stopFilePath = NULL;
+	M2MString FILE_PATH[PATH_MAX];
+	M2MFile *stopFile = NULL;
 	M2MString MESSAGE[256];
 	const M2MString *METHOD_NAME = (M2MString *)"CEPCUI.this_stop()";
-	const M2MString *HOME_DIRECTORY = M2MDirectory_getHomeDirectoryPath();
-	const M2MString *CEP_DIRECTORY = (M2MString *)M2MCEP_DIRECTORY;
-	const M2MString *FILE_NAME = (M2MString *)"cepcui.stop";
 
-	//===== ファイルパスの作成 =====
-	memset(FILE_PATH, 0, sizeof(FILE_PATH));
-	snprintf(FILE_PATH, sizeof(FILE_PATH)-1, (M2MString *)"%s/%s/%s", HOME_DIRECTORY, CEP_DIRECTORY, FILE_NAME);
-
-	if ((file=M2MFile_new(FILE_PATH))!=NULL)
+	//===== Create file path =====
+	if ((stopFilePath=this_getStopFilePath(FILE_PATH, sizeof(FILE_PATH)))!=NULL
+			&& (stopFile=M2MFile_new(stopFilePath))!=NULL)
 		{
 		//===== 中止ファイルが存在している場合 =====
-		if (M2MFile_exists(file)==true)
+		if (M2MFile_exists(stopFile)==true)
 			{
 			memset(MESSAGE, 0, sizeof(MESSAGE));
 			snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"ループ処理を中止するためのファイル（＝\"%s\")が存在するため，処理を中止します", FILE_PATH);
-			M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, MESSAGE);
-			M2MFile_delete(&file);
+			M2MLogger_info(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, MESSAGE);
+			M2MFile_delete(&stopFile);
 			return true;
 			}
 		//===== 中止ファイルが存在しない場合 =====
@@ -597,10 +627,11 @@ static bool this_stop (const M2MCEP *cep)
 			memset(MESSAGE, 0, sizeof(MESSAGE));
 			snprintf(MESSAGE, sizeof(MESSAGE)-1, (M2MString *)"ループ処理を中止するためのファイル（＝\"%s\")が存在しないため，処理を継続します", FILE_PATH);
 			M2MLogger_debug(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, MESSAGE);
-			M2MFile_delete(&file);
+			M2MFile_delete(&stopFile);
 			return false;
 			}
 		}
+	//===== Error handling =====
 	else
 		{
 		M2MLogger_error(M2MCEP_getLogger(cep), METHOD_NAME, __LINE__, (M2MString *)"Failed to create new \"M2MFile\" structure object");
